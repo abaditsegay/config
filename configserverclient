@@ -1,0 +1,243 @@
+Step 1: Create the Spring Boot Config Server
+
+1.1 Initialize the Project
+
+Use Spring Initializr to create a Spring Boot project with the following dependencies:
+	•	Spring Cloud Config Server
+	•	Spring Boot Actuator
+	•	Spring Web
+	•	Spring Boot DevTools (optional, for development ease)
+
+Maven Configuration (pom.xml)
+
+Add dependencies in pom.xml:
+
+<dependencies>
+    <!-- Spring Boot Starter Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Spring Cloud Config Server -->
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-config-server</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Actuator -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Database Connectivity (for reading properties from DB) -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+</dependencies>
+
+1.2 Enable Config Server
+
+Create ConfigServerApplication.java:
+
+package com.example.configserver;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.config.server.EnableConfigServer;
+
+@SpringBootApplication
+@EnableConfigServer
+public class ConfigServerApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ConfigServerApplication.class, args);
+    }
+}
+
+
+1.3 Configure application.yml for File-based Properties
+
+Create src/main/resources/application.yml:
+
+server:
+  port: 8888
+
+spring:
+  application:
+    name: config-server
+  cloud:
+    config:
+      server:
+        git:
+          uri: https://github.com/your-repo/config-properties.git  # Git repository containing configuration files
+          clone-on-start: true
+        jdbc:
+          enabled: true  # Enable database-based configuration
+          sql: SELECT property_key, property_value FROM properties WHERE application=? AND profile=?  # SQL query to fetch config
+
+	Ensure your Git repository contains property files like application.yml, client-service.yml, etc.
+
+
+Step 2: Create a Database for Properties
+
+If you need to store configurations in a database, create a properties table.
+
+2.1 SQL Script
+
+
+CREATE TABLE properties (
+    id SERIAL PRIMARY KEY,
+    application VARCHAR(50),
+    profile VARCHAR(50),
+    property_key VARCHAR(255),
+    property_value VARCHAR(255)
+);
+
+2.2 Example Data
+
+INSERT INTO properties (application, profile, property_key, property_value) 
+VALUES ('client-service', 'dev', 'custom.property', 'Database Config Loaded');
+
+
+Step 3: Create the Spring Boot Config Client
+
+3.1 Initialize the Client Project
+
+Use Spring Initializr to create a new Spring Boot project with:
+	•	Spring Cloud Config Client
+	•	Spring Boot Actuator
+	•	Spring Web
+
+Maven Dependencies
+
+Add dependencies in pom.xml:
+
+
+<dependencies>
+    <!-- Spring Boot Starter Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Spring Cloud Config Client -->
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-starter-config</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Actuator -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+</dependencies>
+
+
+3.2 Configure Client to Fetch Configuration
+
+Create src/main/resources/bootstrap.yml (loads before application.yml):
+
+
+spring:
+  application:
+    name: client-service
+  cloud:
+    config:
+      uri: http://localhost:8888  # Config server URL
+      profile: dev  # Active profile
+
+
+3.3 Create a REST Controller to Read Configurations
+
+Create ConfigClientController.java:
+
+package com.example.client;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RefreshScope  // Allows refreshing config dynamically
+@RestController
+@RequestMapping("/config")
+public class ConfigClientController {
+
+    @Value("${custom.property:Default Value}")
+    private String customProperty;
+
+    @GetMapping
+    public String getConfig() {
+        return "Config Value: " + customProperty;
+    }
+}
+
+
+Step 4: Enable Auto Refresh of Properties
+
+Spring Cloud Config supports refreshing configurations at runtime using Spring Actuator.
+
+4.1 Enable Actuator in application.yml
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: refresh, health, info
+
+4.2 Manually Refresh Configuration
+
+curl -X POST http://localhost:8080/actuator/refresh
+
+
+Step 5: Running and Testing the Setup
+
+5.1 Start the Config Server
+
+mvn spring-boot:run
+or
+java -jar target/config-server-0.0.1-SNAPSHOT.jar
+
+5.2 Start the Database (If Using DB-Based Config)
+
+docker run --name postgres -e POSTGRES_USER=user -e POSTGRES_PASSWORD=pass -p 5432:5432 -d postgres
+
+5.3 Start the Config Client
+
+mvn spring-boot:run
+5.4 Verify Config Server
+
+Check the configuration values from Git:
+
+http://localhost:8888/client-service/dev
+
+5.5 Verify Client Configuration
+
+Call the client service:
+
+http://localhost:8080/config
+
+Best Practices
+	1.	Use Version Control for Configuration Files
+Store configuration properties in a Git repository for easy versioning.
+	2.	Secure Sensitive Properties
+Use Spring Cloud Vault or AWS Parameter Store to store secrets.
+	3.	Enable Database Support for Dynamic Configs
+Fetch some properties from the database for real-time updates.
+	4.	Use @RefreshScope for Dynamic Reloading
+This ensures configuration updates without restarting services.
+	5.	Enable Caching for Performance Optimization
+Avoid frequent database queries for configuration by caching values.
+	6.	Implement Security for Config Server
+	•	Enable authentication to restrict access.
+	•	Secure sensitive values with encryption.
