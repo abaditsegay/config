@@ -1,0 +1,54 @@
+import org.springframework.cloud.config.server.environment.EnvironmentRepository;
+import org.springframework.cloud.config.environment.Environment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.cloud.config.environment.PropertySource;
+import org.springframework.stereotype.Component;
+
+import java.io.*;
+import java.util.*;
+
+@Component
+public class DbFallbackEnvironmentRepository implements EnvironmentRepository {
+
+    private final DbPropertyLoader dbPropertyLoader;
+    private final File fallbackFile = new File("config-fallback.json");
+
+    public DbFallbackEnvironmentRepository(DbPropertyLoader dbPropertyLoader) {
+        this.dbPropertyLoader = dbPropertyLoader;
+    }
+
+    @Override
+    public Environment findOne(String application, String profile, String label) {
+        Map<String, String> properties;
+
+        try {
+            properties = dbPropertyLoader.loadProperties(application, profile);
+            saveToFallbackFile(properties);
+        } catch (Exception e) {
+            System.err.println("DB failed, loading from fallback file: " + e.getMessage());
+            properties = loadFromFallbackFile();
+        }
+
+        Environment env = new Environment(application, profile);
+        env.add(new PropertySource("db-or-fallback", new MapPropertySource("db", properties)));
+        return env;
+    }
+
+    private void saveToFallbackFile(Map<String, String> properties) {
+        try (Writer writer = new FileWriter(fallbackFile)) {
+            new com.fasterxml.jackson.databind.ObjectMapper().writeValue(writer, properties);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write fallback file", e);
+        }
+    }
+
+    private Map<String, String> loadFromFallbackFile() {
+        if (!fallbackFile.exists()) return Collections.emptyMap();
+
+        try (Reader reader = new FileReader(fallbackFile)) {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readValue(reader, HashMap.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read fallback file", e);
+        }
+    }
+}
