@@ -1,54 +1,70 @@
 import org.springframework.cloud.config.server.environment.EnvironmentRepository;
 import org.springframework.cloud.config.environment.Environment;
-import org.springframework.core.env.MapPropertySource;
 import org.springframework.cloud.config.environment.PropertySource;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
 import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Component
-public class DbFallbackEnvironmentRepository implements EnvironmentRepository {
+public class FallbackSavingEnvironmentRepository implements EnvironmentRepository {
 
-    private final DbPropertyLoader dbPropertyLoader;
+    private final EnvironmentRepository delegate;
+    private final ObjectMapper mapper = new ObjectMapper();
     private final File fallbackFile = new File("config-fallback.json");
 
-    public DbFallbackEnvironmentRepository(DbPropertyLoader dbPropertyLoader) {
-        this.dbPropertyLoader = dbPropertyLoader;
+    public FallbackSavingEnvironmentRepository(EnvironmentRepository delegate) {
+        this.delegate = delegate;
     }
 
     @Override
     public Environment findOne(String application, String profile, String label) {
-        Map<String, String> properties;
-
+        Environment env;
         try {
-            properties = dbPropertyLoader.loadProperties(application, profile);
-            saveToFallbackFile(properties);
+            env = delegate.findOne(application, profile, label);
+
+            Map<String, Object> mergedProps = new HashMap<>();
+            for (PropertySource source : env.getPropertySources()) {
+                if (source.getSource() instanceof Map<?, ?> map) {
+                    map.forEach((k, v) -> mergedProps.put((String) k, v));
+                }
+            }
+
+            saveToFallbackFile(mergedProps);
+
         } catch (Exception e) {
-            System.err.println("DB failed, loading from fallback file: " + e.getMessage());
-            properties = loadFromFallbackFile();
+            System.err.println("Primary config failed. Attempting fallback file: " + e.getMessage());
+            env = new Environment(application, profile, label);
+            Map<String, Object> fallbackProps = loadFromFallbackFile();
+            env.add(new PropertySource("fallback", fallbackProps));
         }
 
-        Environment env = new Environment(application, profile);
-        env.add(new PropertySource("db-or-fallback", new MapPropertySource("db", properties)));
         return env;
     }
 
-    private void saveToFallbackFile(Map<String, String> properties) {
+    private void saveToFallbackFile(Map<String, Object> properties) {
         try (Writer writer = new FileWriter(fallbackFile)) {
-            new com.fasterxml.jackson.databind.ObjectMapper().writeValue(writer, properties);
+            mapper.writeValue(writer, properties);
         } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write fallback file", e);
+            System.err.println("Failed to write fallback file: " + e.getMessage());
         }
     }
 
-    private Map<String, String> loadFromFallbackFile() {
+    private Map<String, Object> loadFromFallbackFile() {
         if (!fallbackFile.exists()) return Collections.emptyMap();
 
         try (Reader reader = new FileReader(fallbackFile)) {
-            return new com.fasterxml.jackson.databind.ObjectMapper().readValue(reader, HashMap.class);
+            return mapper.readValue(reader, HashMap.class);
         } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read fallback file", e);
+            System.err.println("Failed to read fallback file: " + e.getMessage());
+            return Collections.emptyMap();
         }
     }
+}
+
+@Bean
+@Primary
+public EnvironmentRepository fallbackEnvironmentRepository(EnvironmentRepository delegate) {
+    return new FallbackSavingEnvironmentRepository(delegate);
 }
